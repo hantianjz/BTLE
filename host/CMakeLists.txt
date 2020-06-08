@@ -3,7 +3,10 @@
 cmake_minimum_required(VERSION 2.8)
 project (btle_all)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 add_subdirectory(btle-tools)
+
 
 ########################################################################
 # Create uninstall target

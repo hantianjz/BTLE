@@ -28,11 +28,8 @@ add_library(libgetopt_static STATIC
 )
 endif()
 
-add_executable(btle_tx btle_tx.c)
-install(TARGETS btle_tx RUNTIME DESTINATION ${INSTALL_DEFAULT_BINDIR})
-
-add_executable(btle_rx btle_rx.c)
-install(TARGETS btle_rx RUNTIME DESTINATION ${INSTALL_DEFAULT_BINDIR})
+add_executable(btle_blade btle_blade.c)
+install(TARGETS btle_blade RUNTIME DESTINATION ${INSTALL_DEFAULT_BINDIR})
 
 IF (USE_BLADERF MATCHES 1)
 include_directories(${LIBBLADERF_INCLUDE_DIR})
@@ -50,14 +47,10 @@ if(MSVC)
 LIST(APPEND TOOLS_LINK_LIBS libgetopt_static)
 endif()
 
-target_link_libraries(btle_tx ${TOOLS_LINK_LIBS} m)
+# target_link_libraries(btle_tx ${TOOLS_LINK_LIBS} m)
 
-IF (USE_BLADERF MATCHES 1)
-target_link_libraries(btle_rx ${TOOLS_LINK_LIBS} m -lpthread)
-ELSE (USE_BLADERF MATCHES 1)
-target_link_libraries(btle_rx ${TOOLS_LINK_LIBS} m)
-ENDIF (USE_BLADERF MATCHES 1)
+target_link_libraries(btle_blade ${TOOLS_LINK_LIBS} m -lpthread)
 
-# MESSAGE(STATUS "1")
-# MESSAGE(STATUS ${LIBBLADERF_LIBRARIES})
-# MESSAGE(STATUS "2")
+MESSAGE(STATUS "1")
+MESSAGE(STATUS ${LIBBLADERF_LIBRARIES})
+MESSAGE(STATUS "2")
