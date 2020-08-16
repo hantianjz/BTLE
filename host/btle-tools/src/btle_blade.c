@@ -1,3 +1,5 @@
+#include "btle_blade.h"
+
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -12,7 +14,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include "btle_rx.h"
+/* Thread-safe wrapper around fprintf(stderr, ...) */
+#define print_error(repeater_, ...)                \
+  do {                                             \
+    pthread_mutex_lock(&repeater_->stderr_lock);   \
+    fprintf(stderr, __VA_ARGS__);                  \
+    pthread_mutex_unlock(&repeater_->stderr_lock); \
+  } while (0)
 
 volatile bool do_exit = false;
 
@@ -55,15 +63,44 @@ void *btle_stream_callback(bladerf_t *dev, bladerf_stream_t *stream,
   (void)samples;
   (void)num_samples;
   bladerf_t *blade = (bladerf_t *)user_data;
-  (void)blade;
 
-  return NULL;
+  struct bladerf_async_task *tmp_p = &blade->async_task;
+
+  int *sample = (int32_t *)samples;
+  for (size_t i = 0; i < num_samples; i++) {
+    int16_t Q = (((*sample) & 0xffff0000) >> 16);
+    int16_t I = (((*sample) & 0x0000ffff));
+    print_error(tmp_p, "Q(%d) I(%d)\n", Q, I);
+
+    /* rx_buf[rx_buf_offset] = (((*sample) >> 4) & 0xFF); */
+    /* rx_buf[rx_buf_offset + 1] = (((*(sample + 1)) >> 4) & 0xFF); */
+    /* rx_buf_offset = (rx_buf_offset + 2) & (LEN_BUF - 1);  // cyclic buffer */
+
+    sample++;
+  }
+
+  if (true || do_exit) {
+    return NULL;
+  }
+
+  return samples;
 }
 
 void *btle_rx_task_run(void *ctx) {
+  int status;
   bladerf_t *blade = (bladerf_t *)ctx;
-  (void)blade;
 
+  struct bladerf_async_task *tmp_p = &blade->async_task;
+
+  print_error(tmp_p, "Start RX bladerf stream.");
+
+  /* Start stream and stay there until we kill the stream */
+  status = bladerf_stream(blade->stream, BLADERF_MODULE_RX);
+  if (status < 0) {
+    print_error(tmp_p, "RX stream failure: %s\r\n", bladerf_strerror(status));
+  }
+
+  print_error(tmp_p, "Existing RX bladerf stream.");
   return NULL;
 }
 
@@ -175,7 +212,7 @@ int btle_setup_board(bladerf_t *blade, uint64_t freq_hz, int gain) {
   }
 
   status = pthread_create(&(blade->async_task.rx_task), NULL, btle_rx_task_run,
-                          NULL);
+                          blade);
   if (status < 0) {
     goto exit_close_blade;
   }
