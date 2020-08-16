@@ -92,7 +92,8 @@ void *btle_stream_callback(struct bladerf *dev, struct bladerf_stream *stream,
 
 void *btle_rx_task_run(void *ctx);
 
-void btle_demod_byte(IQ_TYPE *rxp, int num_byte, uint8_t *out_byte);
+size_t btle_demod_byte(IQ_TYPE *samples, size_t num_samples, uint8_t *out_bytes,
+                       size_t out_bytes_size);
 
 #ifdef __cplusplus
 }

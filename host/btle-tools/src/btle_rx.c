@@ -2159,8 +2159,8 @@ void receiver(IQ_TYPE *rxp_in, int buf_len, int channel_number,
       time_diff = TimevalDiff(&time_current_pkt, &time_pre_pkt);
       time_pre_pkt = time_current_pkt;
 
-      printf("%07dus Pkt%03d Ch%d AA:%08x ", time_diff, pkt_count, channel_number,
-             access_addr);
+      printf("%07dus Pkt%03d Ch%d AA:%08x ", time_diff, pkt_count,
+             channel_number, access_addr);
       printf("Raw:");
       for (i = 0; i < 42; i++) {
         printf("%02x", tmp_byte[i]);
@@ -2212,8 +2212,8 @@ void receiver(IQ_TYPE *rxp_in, int buf_len, int channel_number,
     time_diff = TimevalDiff(&time_current_pkt, &time_pre_pkt);
     time_pre_pkt = time_current_pkt;
 
-    printf("%07dus\t Pkt%03d Ch%d AA:%08x ", time_diff, pkt_count, channel_number,
-           access_addr);
+    printf("%07dus\t Pkt%03d Ch%d AA:%08x ", time_diff, pkt_count,
+           channel_number, access_addr);
     if (filename_pcap != NULL)
       write_packet_to_file(fh_pcap_store, payload_len + 2, tmp_byte,
                            channel_number, access_addr);

@@ -3,6 +3,7 @@
 #include <libbladeRF.h>
 
 // System includes
+#include <byteswap.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -54,36 +55,12 @@ uint64_t btle_get_freq_by_channel_number(int channel_number) {
   return (freq_hz);
 }
 
-void btle_demod_byte(IQ_TYPE *rxp, int num_byte, uint8_t *out_byte) {
-  int i, j;
-  int I0, Q0, I1, Q1;
-  uint8_t bit_decision;
-  int sample_idx = 0;
-
-  for (i = 0; i < num_byte; i++) {
-    out_byte[i] = 0;
-    for (j = 0; j < 8; j++) {
-      I0 = rxp[sample_idx];
-      Q0 = rxp[sample_idx + 1];
-      I1 = rxp[sample_idx + 2];
-      Q1 = rxp[sample_idx + 3];
-      bit_decision = (I0 * Q1 - I1 * Q0) > 0 ? 1 : 0;
-      out_byte[i] = out_byte[i] | (bit_decision << j);
-
-      sample_idx = sample_idx + SAMPLE_PER_SYMBOL * 2;
-    }
-  }
-}
-
 void *btle_stream_callback(struct bladerf *dev, struct bladerf_stream *stream,
                            struct bladerf_metadata *metadata, void *samples,
                            size_t num_samples, void *user_data) {
   (void)dev;
   (void)stream;
   (void)metadata;
-  (void)samples;
-  (void)num_samples;
-  (void)user_data;
   brf_t *brf = (brf_t *)user_data;
 
   brf_print(&brf->async_task,
@@ -105,16 +82,32 @@ void *btle_stream_callback(struct bladerf *dev, struct bladerf_stream *stream,
   return samples;
 }
 
-void btle_demod_byte(IQ_TYPE *rxp, int num_byte, uint8_t *out_byte) {
-  int *sample = (int32_t *)samples;
-  for (size_t i = 0; i < num_samples; i++) {
-    int16_t Q = (((*sample) & 0xffff0000) >> 16);
-    int16_t I = (((*sample) & 0x0000ffff));
-    /* rx_buf[rx_buf_offset] = (((*sample) >> 4) & 0xFF); */
-    /* rx_buf[rx_buf_offset + 1] = (((*(sample + 1)) >> 4) & 0xFF); */
-    /* rx_buf_offset = (rx_buf_offset + 2) & (LEN_BUF - 1);  // cyclic buffer */
-    /* sample++; */
+size_t btle_demod_byte(IQ_TYPE *iq, size_t num_samples, uint8_t *out_bytes,
+                       size_t out_bytes_size) {
+  uint8_t byte = 0;
+  size_t out_byte_idx = 0;
+  int out_bit_idx = 0;
+  size_t sample_idx = 0;
+  while (((sample_idx + 1) < num_samples) && (out_byte_idx < out_bytes_size)) {
+    IQ_TYPE I0 = iq[sample_idx];
+    IQ_TYPE Q0 = iq[sample_idx + 1];
+    IQ_TYPE I1 = iq[sample_idx + 2];
+    IQ_TYPE Q1 = iq[sample_idx + 3];
+
+    uint8_t bit_decision = (I0 * Q1 - I1 * Q0) > 0 ? 1 : 0;
+    printf("I0(%d); Q0(%d); I1(%d); Q1(%d) == %d\n", I0, Q0, I1, Q1,
+           bit_decision);
+    byte = (byte << 1) | bit_decision;
+    out_bit_idx++;
+    if ((out_bit_idx % 8) == 0) {
+      out_bit_idx = 0;
+      out_bytes[out_byte_idx] = byte;
+      out_byte_idx++;
+    }
+    sample_idx += 4;
   }
+
+  return out_byte_idx;
 }
 
 void *btle_rx_task_run(void *ctx) {
@@ -353,6 +346,8 @@ int main(int argc, char **argv) {
   }
 
   printf("data read %d...\n", s_brf.rx_data.new_sample);
+  btle_demod_byte((IQ_TYPE *)s_brf.rx_data.rx_block_buf, SAMPLES_PER_BLOCK,
+                  NULL, 0);
 
   goto program_quit;
 program_quit:
