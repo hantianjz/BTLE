@@ -34,9 +34,6 @@ size_t brf_shift_queue_push(brf_shift_queue_t *q, const uint8_t *src,
 
   unsigned char const *buf_ptr = (unsigned char const *)src;
 
-  // Determine if read_idx needs to be bumpped due to over writting
-  const unsigned overwrite_len = size - MIN(size, brf_shift_queue_remain(q));
-
   // Get write offset for accessing queue buffer
   const unsigned write_offset = q->write_idx & (q->capacity - 1);
   // Find the number of bytes can write before wrap around
@@ -50,6 +47,9 @@ size_t brf_shift_queue_push(brf_shift_queue_t *q, const uint8_t *src,
   }
   q->write_idx += size;
 
+  // Determine if read_idx needs to be bumpped due to over writting
+  const unsigned overwrite_len =
+      MAX((q->write_idx - q->read_idx), q->capacity) - q->capacity;
   q->read_idx += overwrite_len;
 
   return overwrite_len;
@@ -65,11 +65,11 @@ bool brf_shift_queue_compare(brf_shift_queue_t *q, const uint8_t *src,
   // Find the number of bytes can read before wrap around
   const unsigned pre_wrap_read_len = MIN(size, q->capacity - read_offset);
 
-  int ret = memcmp(&q->buff[q->read_idx], src, pre_wrap_read_len);
-  if (pre_wrap_read_len < size) {
-    ret +=
-        memcmp(&q->buff[0], &src[pre_wrap_read_len], size - pre_wrap_read_len);
-  }
+  bool ret = !memcmp(&q->buff[read_offset], src, pre_wrap_read_len);
 
-  return !ret;
+  if (pre_wrap_read_len < size) {
+    ret = ret && !memcmp(&q->buff[0], &src[pre_wrap_read_len],
+                        size - pre_wrap_read_len);
+  }
+  return ret;
 }

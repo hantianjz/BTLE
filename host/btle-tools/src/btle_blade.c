@@ -146,21 +146,27 @@ int brf_search_unique_bits(const iq_sample_t *iq_buff, size_t iq_count,
   assert(!((unique_bits_size - 1) & unique_bits_size));
 
   brf_shift_queue_t demod_queue[SAMPLE_PER_SYMBOL];
+  uint8_t demod_queue_buf[SAMPLE_PER_SYMBOL][unique_bits_size];
+  memset(demod_queue_buf, 0, sizeof(demod_queue_buf));
+
   uint8_t demod_buf_access[SAMPLE_PER_SYMBOL][unique_bits_size];
+  memset(demod_buf_access, 0, sizeof(demod_buf_access));
 
   for (int i = 0; i < SAMPLE_PER_SYMBOL; i++) {
-    brf_shift_queue_init(&demod_queue[i], demod_buf_access[i],
-                         sizeof(demod_buf_access[i]));
+    brf_shift_queue_init(&demod_queue[i], demod_queue_buf[i],
+                         sizeof(demod_queue_buf[i]));
   }
 
   for (unsigned i = 0; i < iq_count - SAMPLE_PER_SYMBOL;
        i += SAMPLE_PER_SYMBOL) {
+
     for (unsigned j = 0; j < SAMPLE_PER_SYMBOL; j++) {
       int phase_idx = j;
 
       // Ensure don't access buffer beyond given
       assert((i + j + SAMPLE_PER_SYMBOL) < iq_count);
       uint8_t demod_bit = btle_demod_bit(&iq_buff[i + j], SAMPLE_PER_SYMBOL);
+
       brf_shift_queue_push(&demod_queue[phase_idx], &demod_bit,
                            sizeof(demod_bit));
 
