@@ -28,7 +28,7 @@ add_library(libgetopt_static STATIC
 )
 endif()
 
-add_executable(btle_blade btle_blade.c)
+add_executable(btle_blade btle_blade.c brf_shift_queue.c)
 install(TARGETS btle_blade RUNTIME DESTINATION ${INSTALL_DEFAULT_BINDIR})
 
 IF (USE_BLADERF MATCHES 1)

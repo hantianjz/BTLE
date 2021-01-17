@@ -2,7 +2,10 @@
 
 #include <libbladeRF.h>
 
+#include "brf_shift_queue.h"
+
 // System includes
+#include <assert.h>
 #include <byteswap.h>
 #include <signal.h>
 #include <stdio.h>
@@ -133,66 +136,54 @@ uint8_t *brf_search_bit_array_pattern(uint8_t *data, size_t data_len,
   return NULL;
 }
 
-inline int search_unique_bits(IQ_TYPE *rxp, unsigned search_len,
-                              uint8_t *unique_bits, uint8_t *unique_bits_mask,
-                              const int num_bits) {
-  int sp, i0, q0, i1, q1, k, p, phase_idx;
-  bool unequal_flag;
-  const int demod_buf_len = num_bits;
-  int demod_buf_offset = 0;
+int brf_search_unique_bits(const iq_sample_t *iq_buff, size_t iq_count,
+                           const uint8_t *unique_bits,
+                           const uint8_t *unique_bits_mask,
+                           size_t unique_bits_size) {
+  assert(iq_buff);
 
-  uint8_t demod_buf_access[SAMPLE_PER_SYMBOL][LEN_DEMOD_BUF_ACCESS];
+  // Ensure unique_bits_size is order of 2 value
+  assert(!((unique_bits_size - 1) & unique_bits_size));
 
-  // demod_buf_preamble_access[SAMPLE_PER_SYMBOL][LEN_DEMOD_BUF_PREAMBLE_ACCESS]
-  // memset(demod_buf_preamble_access, 0,
-  // SAMPLE_PER_SYMBOL*LEN_DEMOD_BUF_PREAMBLE_ACCESS);
-  memset(demod_buf_access, 0, SAMPLE_PER_SYMBOL * LEN_DEMOD_BUF_ACCESS);
-  for (unsigned i = 0; i < search_len * SAMPLE_PER_SYMBOL * 2;
-       i = i + (SAMPLE_PER_SYMBOL * 2)) {
-    sp = ((demod_buf_offset - demod_buf_len + 1) & (demod_buf_len - 1));
-    // sp = (demod_buf_offset-demod_buf_len+1);
-    // if (sp>=demod_buf_len)
-    //  sp = sp - demod_buf_len;
+  brf_shift_queue_t demod_queue[SAMPLE_PER_SYMBOL];
+  uint8_t demod_buf_access[SAMPLE_PER_SYMBOL][unique_bits_size];
 
-    for (unsigned j = 0; j < (SAMPLE_PER_SYMBOL * 2); j = j + 2) {
-      i0 = rxp[i + j];
-      q0 = rxp[i + j + 1];
-      i1 = rxp[i + j + 2];
-      q1 = rxp[i + j + 3];
+  for (int i = 0; i < SAMPLE_PER_SYMBOL; i++) {
+    brf_shift_queue_init(&demod_queue[i], demod_buf_access[i],
+                         sizeof(demod_buf_access[i]));
+  }
 
-      phase_idx = j / 2;
-      // demod_buf_preamble_access[phase_idx][demod_buf_offset] = (i0*q1 -
-      // i1*q0) > 0? 1: 0;
-      demod_buf_access[phase_idx][demod_buf_offset] =
-          (i0 * q1 - i1 * q0) > 0 ? 1 : 0;
+  for (unsigned i = 0; i < iq_count - SAMPLE_PER_SYMBOL;
+       i += SAMPLE_PER_SYMBOL) {
+    for (unsigned j = 0; j < SAMPLE_PER_SYMBOL; j++) {
+      int phase_idx = j;
 
-      k = sp;
-      unequal_flag = false;
-      for (p = 0; p < demod_buf_len; p++) {
-        // if (demod_buf_preamble_access[phase_idx][k] != unique_bits[p]) {
-        if (demod_buf_access[phase_idx][k] != unique_bits[p] &&
-            unique_bits_mask[p]) {
-          unequal_flag = true;
-          break;
+      // Ensure don't access buffer beyond given
+      assert((i + j + SAMPLE_PER_SYMBOL) < iq_count);
+      uint8_t demod_bit = btle_demod_bit(&iq_buff[i + j], SAMPLE_PER_SYMBOL);
+      brf_shift_queue_push(&demod_queue[phase_idx], &demod_bit,
+                           sizeof(demod_bit));
+
+      if (brf_shift_queue_size(&demod_queue[phase_idx]) >= unique_bits_size) {
+        (void)unique_bits_mask;
+        // TODO: Support match with mask
+        bool is_match = brf_shift_queue_compare(&demod_queue[phase_idx],
+                                                unique_bits, unique_bits_size);
+        if (is_match) {
+          return i + j + SAMPLE_PER_SYMBOL;
         }
-        k = ((k + 1) & (demod_buf_len - 1));
-        // k = (k + 1);
-        // if (k>=demod_buf_len)
-        //  k = k - demod_buf_len;
-      }
-
-      if (unequal_flag == false) {
-        return (i + j - (demod_buf_len - 1) * SAMPLE_PER_SYMBOL * 2);
       }
     }
-
-    demod_buf_offset = ((demod_buf_offset + 1) & (demod_buf_len - 1));
-    // demod_buf_offset  = (demod_buf_offset+1);
-    // if (demod_buf_offset>=demod_buf_len)
-    //  demod_buf_offset = demod_buf_offset - demod_buf_len;
   }
 
   return (-1);
+}
+
+uint8_t btle_demod_bit(const iq_sample_t *iq, size_t num_samples) {
+  assert(num_samples >= SAMPLE_PER_SYMBOL);
+  (void)num_samples;
+
+  return ((iq[0].I * iq[1].Q) - (iq[1].I * iq[0].Q)) > 0 ? 1 : 0;
 }
 
 size_t btle_demod_bits(IQ_TYPE *iq, size_t num_samples, uint8_t *out_bits,
@@ -200,15 +191,8 @@ size_t btle_demod_bits(IQ_TYPE *iq, size_t num_samples, uint8_t *out_bits,
   size_t out_bit_idx = 0;
   size_t sample_idx = 0;
   while (((sample_idx + 1) < num_samples) && (out_bit_idx < out_bit_size)) {
-    IQ_TYPE I0 = iq[sample_idx];
-    IQ_TYPE Q0 = iq[sample_idx + 1];
-    IQ_TYPE I1 = iq[sample_idx + 2];
-    IQ_TYPE Q1 = iq[sample_idx + 3];
-
-    uint8_t bit_decision = (I0 * Q1 - I1 * Q0) > 0 ? 1 : 0;
-    /* printf("I0(%d); Q0(%d); I1(%d); Q1(%d) == %d\n", I0, Q0, I1, Q1, */
-    /*        bit_decision); */
-    out_bits[out_bit_idx] = bit_decision;
+    out_bits[out_bit_idx] =
+        btle_demod_bit((iq_sample_t *)iq, SAMPLE_PER_SYMBOL);
     out_bit_idx++;
     sample_idx += 4;
   }
@@ -236,8 +220,14 @@ void *btle_rx_task_run(void *ctx) {
 void *btle_demod_task_run(void *ctx) {
   brf_t *brf = (brf_t *)ctx;
 
+  brf_data_t *rx_data = NULL;
   while (!s_brf.async_tasks.do_exit) {
-    brf_data_t *rx_data = NULL;
+    if (!rx_data) {
+      pthread_cond_wait(&brf->async_tasks.rx_data_cond,
+                        &brf->async_tasks.rx_data_lock);
+    }
+
+    rx_data = NULL;
     for (unsigned i = 0; i < sizeof(brf->rx_data) / sizeof(brf->rx_data[0]);
          i++) {
       if (brf->rx_data[i].new_sample) {
@@ -246,10 +236,7 @@ void *btle_demod_task_run(void *ctx) {
       }
     }
 
-    if (!rx_data) {
-      pthread_cond_wait(&brf->async_tasks.rx_data_cond,
-                        &brf->async_tasks.rx_data_lock);
-    } else {
+    if (rx_data) {
       pthread_mutex_lock(&rx_data->lock);
       btle_demod_process(brf, rx_data);
       rx_data->new_sample = false;
@@ -425,12 +412,16 @@ int btle_setup_demod(brf_t *brf) {
 }
 
 void btle_demod_process(brf_t *brf, brf_data_t *rx_data) {
-  int num_symbol_left =
-      sizeof(rx_data->rx_block_buf) / (SAMPLE_PER_SYMBOL * 2);  // 2 for IQ
-  int ret =
-      search_unique_bits((IQ_TYPE *)rx_data->rx_block_buf, num_symbol_left,
-                         brf->access_addr_bit_array, brf->access_mask_bit_array,
-                         LEN_DEMOD_BUF_ACCESS);
+  assert(brf);
+  assert(rx_data);
+
+  assert(sizeof(brf->access_addr_bit_array) ==
+         sizeof(brf->access_mask_bit_array));
+  int ret = brf_search_unique_bits(
+      (iq_sample_t *)rx_data->rx_block_buf,
+      sizeof(rx_data->rx_block_buf) / sizeof(iq_sample_t),
+      brf->access_addr_bit_array, brf->access_mask_bit_array,
+      sizeof(brf->access_addr_bit_array));
   if (ret > 0) {
     brf_print(&brf->async_tasks, "+");
   } else {
@@ -495,7 +486,8 @@ int main(int argc, char **argv) {
   }
 
   printf(
-      "Cmd line input: chan %d, freq %lldMHz, access addr %08x, crc init %06x "
+      "Cmd line input: chan %d, freq %lldMHz, access addr %08x, crc init "
+      "%06x "
       "raw %d verbose %d rx %ddB file=%s\n",
       chan, freq_hz / MEGAHZ, access_addr, crc_init, raw_flag, verbose_flag,
       gain, filename_pcap);

@@ -36,7 +36,7 @@ add_definitions(/D _CRT_SECURE_NO_WARNINGS)
 else()
 add_definitions(-Wall)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wno-variadic-macros -fexceptions -ferror-limit=10000 -DNDEBUG -std=c++11 -I/usr/lib/ -I/usr/include/")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror -Wno-variadic-macros -fexceptions -DNDEBUG -I/usr/lib/ -I/usr/include/")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ggdb -Wall -Wextra -Werror -Wno-variadic-macros -fexceptions  -I/usr/lib/ -I/usr/include/")
 endif()
 
 # Find needed packages.
