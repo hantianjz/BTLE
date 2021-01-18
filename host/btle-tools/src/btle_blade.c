@@ -2,6 +2,8 @@
 
 #include <libbladeRF.h>
 
+#include "brf_adv_pdu.h"
+#include "brf_crc.h"
 #include "brf_shift_queue.h"
 
 // System includes
@@ -106,9 +108,39 @@ void *btle_stream_callback(struct bladerf *dev, struct bladerf_stream *stream,
   return brf->stream_buffers[brf->stream_buffers_idx];
 }
 
-void brf_uint32_to_bit_array(uint32_t uint32_in, uint8_t *bit) {
+void brf_bit_array_to_bytes(uint8_t *bit_array, size_t bit_array_size,
+                            uint8_t *bytes, size_t bytes_size) {
+  assert(bit_array);
+  assert(bit_array_size >= (bytes_size * NUM_BIT_PER_BYTE));
+
+  memset(bytes, 0, bytes_size);
+
+  // Data is in Little-endian, least significant bit transmitted first
+  for (unsigned i = 0; i < bytes_size * NUM_BIT_PER_BYTE; i++) {
+    bytes[i / NUM_BIT_PER_BYTE] |= bit_array[i] << (i % NUM_BIT_PER_BYTE);
+  }
+}
+
+void brf_uint8_to_bit_array(uint8_t uint8_in, uint8_t *bit_array,
+                            size_t bit_array_size) {
+  assert(bit_array);
+  assert(bit_array_size >= (sizeof(uint8_in) * NUM_BIT_PER_BYTE));
+
+  // Data is in Little-endian, least significant bit transmitted first
+  for (size_t i = 0; i < sizeof(uint8_in) * NUM_BIT_PER_BYTE; i++) {
+    bit_array[i] = 0x01 & uint8_in;
+    uint8_in = (uint8_in >> 1);
+  }
+}
+
+void brf_uint32_to_bit_array(uint32_t uint32_in, uint8_t *bit_array,
+                             size_t bit_array_size) {
+  assert(bit_array);
+  assert(bit_array_size >= (sizeof(uint32_in) * NUM_BIT_PER_BYTE));
+
+  // Data is in Little-endian, least significant bit transmitted first
   for (size_t i = 0; i < sizeof(uint32_in) * NUM_BIT_PER_BYTE; i++) {
-    bit[i] = 0x01 & uint32_in;
+    bit_array[i] = 0x01 & uint32_in;
     uint32_in = (uint32_in >> 1);
   }
 }
@@ -126,6 +158,12 @@ void btle_print_xxd(uint8_t *data, size_t len) {
   printf("\n");
 }
 
+void btle_print_mac_addr(uint8_t *data, size_t len) {
+  assert(len >= 6);
+  printf("%02x:%02x:%02x:%02x:%02x:%02x", data[5], data[4], data[3], data[2],
+         data[1], data[0]);
+}
+
 uint8_t *brf_search_bit_array_pattern(uint8_t *data, size_t data_len,
                                       uint8_t *pattern, size_t pattern_len) {
   for (size_t i = 0; i < (data_len - pattern_len); i++) {
@@ -136,74 +174,116 @@ uint8_t *brf_search_bit_array_pattern(uint8_t *data, size_t data_len,
   return NULL;
 }
 
-int brf_search_unique_bits(const iq_sample_t *iq_buff, size_t iq_count,
+int brf_search_unique_bits(const iq_sample_t *iq_samples, size_t iq_count,
                            const uint8_t *unique_bits,
                            const uint8_t *unique_bits_mask,
                            size_t unique_bits_size) {
-  assert(iq_buff);
+  assert(iq_samples);
 
   // Ensure unique_bits_size is order of 2 value
   assert(!((unique_bits_size - 1) & unique_bits_size));
 
-  brf_shift_queue_t demod_queue[SAMPLE_PER_SYMBOL];
-  uint8_t demod_queue_buf[SAMPLE_PER_SYMBOL][unique_bits_size];
-  memset(demod_queue_buf, 0, sizeof(demod_queue_buf));
+  brf_shift_queue_t demod_queue[IQ_PER_SYMBOL];
+  uint8_t *demod_queue_buf =
+      (uint8_t *)malloc(IQ_PER_SYMBOL * unique_bits_size);
 
-  uint8_t demod_buf_access[SAMPLE_PER_SYMBOL][unique_bits_size];
-  memset(demod_buf_access, 0, sizeof(demod_buf_access));
-
-  for (int i = 0; i < SAMPLE_PER_SYMBOL; i++) {
-    brf_shift_queue_init(&demod_queue[i], demod_queue_buf[i],
-                         sizeof(demod_queue_buf[i]));
+  for (int i = 0; i < (int)IQ_PER_SYMBOL; i++) {
+    brf_shift_queue_init(&demod_queue[i],
+                         &demod_queue_buf[i * unique_bits_size],
+                         unique_bits_size);
   }
 
-  for (unsigned i = 0; i < iq_count - SAMPLE_PER_SYMBOL;
-       i += SAMPLE_PER_SYMBOL) {
+  int ret_sample_idx = -1;
 
-    for (unsigned j = 0; j < SAMPLE_PER_SYMBOL; j++) {
-      int phase_idx = j;
+  // Iterate over iq_samples one sample at a time attempting to
+  // find the unique_bits.
+  // 4 samplees demod to 1 bit, but iq samples does not provide framing we need
+  // to find start of the frame outself, hence the unique access addr.
+  //
+  // We maintain 4 sliding window short of bit buffs with size of
+  // |unique_bits_size|. Each sliding window is offset by 1 samples, since there
+  // are 4 samples per bit. Each new sample allow one new bit to be demodulated
+  // in 1 of 4 sliding windows.
+  for (unsigned i = 0; i < iq_count - IQ_PER_SYMBOL; i++) {
+    int phase_idx = i % IQ_PER_SYMBOL;
 
-      // Ensure don't access buffer beyond given
-      assert((i + j + SAMPLE_PER_SYMBOL) < iq_count);
-      uint8_t demod_bit = btle_demod_bit(&iq_buff[i + j], SAMPLE_PER_SYMBOL);
+    // Ensure don't access buffer beyond given
+    assert((i + IQ_PER_SYMBOL) < iq_count);
+    uint8_t demod_bit = btle_demod_bit(&iq_samples[i], IQ_PER_SYMBOL);
 
-      brf_shift_queue_push(&demod_queue[phase_idx], &demod_bit,
-                           sizeof(demod_bit));
+    brf_shift_queue_push(&demod_queue[phase_idx], &demod_bit,
+                         sizeof(demod_bit));
 
-      if (brf_shift_queue_size(&demod_queue[phase_idx]) >= unique_bits_size) {
-        (void)unique_bits_mask;
-        // TODO: Support match with mask
-        bool is_match = brf_shift_queue_compare(&demod_queue[phase_idx],
-                                                unique_bits, unique_bits_size);
-        if (is_match) {
-          return i + j + SAMPLE_PER_SYMBOL;
-        }
+    if (brf_shift_queue_size(&demod_queue[phase_idx]) >= unique_bits_size) {
+      (void)unique_bits_mask;
+      // TODO: Support match with mask
+      bool is_match = brf_shift_queue_compare(&demod_queue[phase_idx],
+                                              unique_bits, unique_bits_size);
+      if (is_match) {
+        ret_sample_idx = i + IQ_PER_SYMBOL;
+        break;
       }
     }
   }
 
-  return (-1);
+  free(demod_queue_buf);
+
+  return ret_sample_idx;
+}
+
+void scramble_byte(uint8_t *bytes, int num_byte,
+                   const uint8_t *scramble_table_byte) {
+  int i;
+  for (i = 0; i < num_byte; i++) {
+    bytes[i] = bytes[i] ^ scramble_table_byte[i];
+  }
 }
 
 uint8_t btle_demod_bit(const iq_sample_t *iq, size_t num_samples) {
-  assert(num_samples >= SAMPLE_PER_SYMBOL);
+  assert(num_samples >= IQ_PER_SYMBOL);
   (void)num_samples;
+
+  // Frequency-Shift Keying
+  // Phase delta > 0 == 1
+  // Phase delta < 0 == 0
+  // Phase delta == Q1/I1 - Q0/I0
+  // Which roughly translate to below
 
   return ((iq[0].I * iq[1].Q) - (iq[1].I * iq[0].Q)) > 0 ? 1 : 0;
 }
 
-size_t btle_demod_bits(IQ_TYPE *iq, size_t num_samples, uint8_t *out_bits,
+size_t btle_demod_bits(iq_sample_t *iq, size_t iq_size, uint8_t *out_bits,
                        size_t out_bit_size) {
-  size_t out_bit_idx = 0;
-  size_t sample_idx = 0;
-  while (((sample_idx + 1) < num_samples) && (out_bit_idx < out_bit_size)) {
-    out_bits[out_bit_idx] =
-        btle_demod_bit((iq_sample_t *)iq, SAMPLE_PER_SYMBOL);
-    out_bit_idx++;
-    sample_idx += 4;
+  assert(iq && out_bits);
+  assert((out_bit_size * IQ_PER_SYMBOL) < iq_size);
+
+  for (size_t i = 0; i < out_bit_size; i++) {
+    out_bits[i] = btle_demod_bit(&iq[i * IQ_PER_SYMBOL], IQ_PER_SYMBOL);
   }
 
-  return out_bit_idx;
+  return (out_bit_size * IQ_PER_SYMBOL);
+}
+
+size_t btle_demod_bytes(iq_sample_t *iq, size_t iq_size, uint8_t *out_bytes,
+                        size_t out_byte_size) {
+  assert(iq && out_bytes);
+  assert((out_byte_size * NUM_BIT_PER_BYTE * IQ_PER_SYMBOL) < iq_size);
+
+  iq_sample_t *curr_iq = iq;
+  size_t iq_size_left = iq_size;
+  for (size_t i = 0; i < out_byte_size; i++) {
+    assert(iq_size_left > 0);
+
+    uint8_t bits_out[NUM_BIT_PER_BYTE];
+    size_t advanced_count =
+        btle_demod_bits(curr_iq, iq_size_left, bits_out, sizeof(bits_out));
+    iq_size_left -= advanced_count;
+    curr_iq += advanced_count;
+
+    brf_bit_array_to_bytes(bits_out, sizeof(bits_out), &out_bytes[i], 1);
+  }
+
+  return iq_size - iq_size_left;
 }
 
 void *btle_rx_task_run(void *ctx) {
@@ -294,7 +374,7 @@ int btle_setup_board(brf_t *brf, uint64_t freq_hz, int gain) {
   }
 
   status = bladerf_set_sample_rate(brf->rf_dev, BLADERF_MODULE_RX,
-                                   SAMPLE_PER_SYMBOL * 1000000ul, &actual);
+                                   IQ_PER_SYMBOL * 1000000ul, &actual);
   if (status != 0) {
     fprintf(stderr, "Failed to set sample rate: %s\n",
             bladerf_strerror(status));
@@ -305,7 +385,7 @@ int btle_setup_board(brf_t *brf, uint64_t freq_hz, int gain) {
   }
 
   status = bladerf_set_bandwidth(brf->rf_dev, BLADERF_MODULE_RX,
-                                 SAMPLE_PER_SYMBOL * 1000000ul / 2, &actual);
+                                 IQ_PER_SYMBOL * 1000000ul / 2, &actual);
   if (status != 0) {
     fprintf(stderr, "Failed to set bandwidth: %s\n", bladerf_strerror(status));
     goto exit_close_blade;
@@ -423,33 +503,116 @@ void btle_demod_process(brf_t *brf, brf_data_t *rx_data) {
 
   assert(sizeof(brf->access_addr_bit_array) ==
          sizeof(brf->access_mask_bit_array));
-  int ret = brf_search_unique_bits(
-      (iq_sample_t *)rx_data->rx_block_buf,
-      sizeof(rx_data->rx_block_buf) / sizeof(iq_sample_t),
-      brf->access_addr_bit_array, brf->access_mask_bit_array,
-      sizeof(brf->access_addr_bit_array));
-  if (ret > 0) {
-    brf_print(&brf->async_tasks, "+");
-  } else {
-    brf_print(&brf->async_tasks, ".");
+
+  iq_sample_t *iq_samples = (iq_sample_t *)rx_data;
+  size_t iq_samples_count = sizeof(rx_data->rx_block_buf) / sizeof(iq_sample_t);
+
+  while (iq_samples_count > 0) {
+    /***** Search for the preamble *****/
+    if (iq_samples_count < (sizeof(brf->preamble_bit_array) * IQ_PER_SYMBOL)) {
+      break;
+    }
+    int advanced_samples = brf_search_unique_bits(
+        iq_samples, iq_samples_count, brf->preamble_bit_array,
+        brf->access_mask_bit_array, sizeof(brf->preamble_bit_array));
+    if (advanced_samples < 0) {
+      break;
+    }
+    iq_samples_count -= advanced_samples;
+    iq_samples += advanced_samples;
+
+    // TODO: Do both togather
+    /***** Search for access address after the preamble *****/
+    if (iq_samples_count <
+        (sizeof(brf->access_addr_bit_array) * IQ_PER_SYMBOL)) {
+      break;
+    }
+
+    advanced_samples = brf_search_unique_bits(
+        iq_samples, iq_samples_count, brf->access_addr_bit_array,
+        brf->access_mask_bit_array, sizeof(brf->access_addr_bit_array));
+    if (advanced_samples < 0) {
+      break;
+    }
+
+    iq_samples_count -= advanced_samples;
+    iq_samples += advanced_samples;
+
+    /***** Demod the main packet header *****/
+    brf_adv_pdu_t pdu;
+    memset(&pdu, 0, sizeof(pdu));
+
+    // Ensure there is at least 2 bytes worth of iq samples left
+    // TODO: Handle warp around to next rx data block
+    if (iq_samples_count <
+        (sizeof(pdu.hdr) * NUM_BIT_PER_BYTE * IQ_PER_SYMBOL)) {
+      break;
+    }
+
+    // Demodulate header byte + length byte immediately after the access addr
+    advanced_samples = btle_demod_bytes(iq_samples, iq_samples_count,
+                                        (uint8_t *)&pdu.hdr, sizeof(pdu.hdr));
+    iq_samples_count -= advanced_samples;
+    iq_samples += advanced_samples;
+
+    // Descramble the header 2 bytes
+    scramble_byte((uint8_t *)&pdu.hdr, sizeof(pdu.hdr),
+                  scramble_table[brf->channel_number]);
+
+    size_t payload_len = brf_adv_pdu_get_len(&pdu);
+
+    if (payload_len < 6 || payload_len > 37) {
+      brf_print(&brf->async_tasks,
+                "Error: ADV(%s) payload length(%lu) should be 6~37!\n",
+                brf_adv_pdu_get_type_str(&pdu), payload_len);
+      continue;
+    }
+
+    // Ensure there is at least payload len worth of iq samples left
+    // TODO: Handle warp around to next rx data block
+    if (iq_samples_count < ((payload_len + BRF_ADV_PDU_CRC_SIZE) *
+                            NUM_BIT_PER_BYTE * IQ_PER_SYMBOL)) {
+      break;
+    }
+
+    // Demodulate main payload
+    advanced_samples = btle_demod_bytes(iq_samples, iq_samples_count,
+                                        pdu.payload, payload_len);
+    iq_samples_count -= advanced_samples;
+    iq_samples += advanced_samples;
+
+    // Demodulate crc bytes
+    advanced_samples = btle_demod_bytes(iq_samples, iq_samples_count, pdu.crc,
+                                        BRF_ADV_PDU_CRC_SIZE);
+    iq_samples_count -= advanced_samples;
+    iq_samples += advanced_samples;
+
+    // Descramble the payload bytes
+    scramble_byte(pdu.payload, payload_len,
+                  &scramble_table[brf->channel_number][sizeof(pdu.hdr)]);
+
+    // Descramble the crc bytes
+    scramble_byte(
+        pdu.crc, sizeof(pdu.crc),
+        &scramble_table[brf->channel_number][sizeof(pdu.hdr) + payload_len]);
+
+    uint32_t calc_crc = brf_crc24((uint8_t *)&pdu.hdr, sizeof(pdu.hdr));
+    calc_crc = brf_crc24_update(pdu.payload, payload_len, calc_crc);
+    bool crc_flag = brf_adv_pdu_get_crc(&pdu) == calc_crc;
+
+    if (crc_flag) {
+      uint8_t adv_a[BRF_ADV_PDU_ADV_A_SIZE];
+      bool ret = brf_adv_pdu_get_adv_a(&pdu, adv_a, sizeof(adv_a));
+      if (ret) {
+        btle_print_mac_addr(adv_a, sizeof(adv_a));
+      } else {
+        brf_print(&brf->async_tasks, "\t");
+      }
+      brf_print(&brf->async_tasks, " ADV:%s  \tT:%d tR:%d \tCRC%d\n",
+                brf_adv_pdu_get_type_str(&pdu), brf_adv_pdu_get_tx_add(&pdu),
+                brf_adv_pdu_get_rx_add(&pdu), crc_flag);
+    }
   }
-
-  /*
-  uint8_t demod_bits[SAMPLES_PER_BLOCK / SAMPLE_PER_SYMBOL];
-
-  brf_print(&brf->async_tasks, ".");
-  size_t demod_bits_count =
-      btle_demod_bits((IQ_TYPE *)rx_data->rx_block_buf, SAMPLES_PER_BLOCK,
-                      demod_bits, sizeof(demod_bits));
-
-  uint8_t *aligned_bits = brf_search_bit_array_pattern(
-      demod_bits, demod_bits_count, brf->access_addr_bit_array,
-      sizeof(brf->access_addr_bit_array));
-  if (aligned_bits) {
-    brf_print(&brf->async_tasks, "Found bits at (%p) bytes offset (%lu)\n",
-              aligned_bits, aligned_bits - demod_bits);
-  }
-  */
 }
 
 int main(int argc, char **argv) {
@@ -489,6 +652,7 @@ int main(int argc, char **argv) {
 
   if (freq_hz == 123) {
     freq_hz = btle_get_freq_by_channel_number(chan);
+    s_brf.channel_number = chan;
   }
 
   printf(
@@ -510,13 +674,19 @@ int main(int argc, char **argv) {
 
   s_brf.debug = false;
 
-  brf_uint32_to_bit_array(DEFAULT_ACCESS_ADDR, s_brf.access_addr_bit_array);
+  brf_uint32_to_bit_array(DEFAULT_ACCESS_ADDR, s_brf.access_addr_bit_array,
+                          sizeof(s_brf.access_addr_bit_array));
   btle_print_xxd(s_brf.access_addr_bit_array,
                  sizeof(s_brf.access_addr_bit_array));
 
-  brf_uint32_to_bit_array(DEFAULT_ACCESS_MASK, s_brf.access_mask_bit_array);
+  brf_uint32_to_bit_array(DEFAULT_ACCESS_MASK, s_brf.access_mask_bit_array,
+                          sizeof(s_brf.access_mask_bit_array));
   btle_print_xxd(s_brf.access_mask_bit_array,
                  sizeof(s_brf.access_mask_bit_array));
+
+  brf_uint8_to_bit_array(PREAMBLE_1M, s_brf.preamble_bit_array,
+                         sizeof(s_brf.preamble_bit_array));
+  btle_print_xxd(s_brf.preamble_bit_array, sizeof(s_brf.preamble_bit_array));
 
   if (btle_setup_stream(&s_brf) != EXIT_SUCCESS) {
     goto program_quit;

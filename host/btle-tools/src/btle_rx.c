@@ -2147,8 +2147,7 @@ void receiver(IQ_TYPE *rxp_in, int buf_len, int channel_number,
     demod_byte(rxp, num_demod_byte, tmp_byte);
 
     if (!raw_flag)
-      scramble_byte(tmp_byte, num_demod_byte, scramble_table[channel_number],
-                    tmp_byte);
+      scramble_byte(tmp_byte, num_demod_byte, scramble_table[channel_number]);
     rxp = rxp_in + buf_len_eaten;
     num_symbol_left = (buf_len - buf_len_eaten) / (SAMPLE_PER_SYMBOL * 2);
 

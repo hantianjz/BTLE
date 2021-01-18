@@ -10,6 +10,7 @@ void brf_shift_queue_init(brf_shift_queue_t *q, uint8_t *buff,
   assert(!((buff_size - 1) & buff_size));
 
   memset(q, 0, sizeof(*q));
+  memset(buff, 0, buff_size);
 
   q->buff = buff;
   q->capacity = buff_size;
@@ -69,7 +70,7 @@ bool brf_shift_queue_compare(brf_shift_queue_t *q, const uint8_t *src,
 
   if (pre_wrap_read_len < size) {
     ret = ret && !memcmp(&q->buff[0], &src[pre_wrap_read_len],
-                        size - pre_wrap_read_len);
+                         size - pre_wrap_read_len);
   }
   return ret;
 }
