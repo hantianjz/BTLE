@@ -4,10 +4,10 @@
 #include <string.h>
 
 static const char *s_adv_pdu_type_str[] = {
-    "ADV_IND",   "ADV_DIRECT_IND", "ADV_NONCONN_IND", "SCAN_REQ",
-    "SCAN_RSP",  "CONNECT_REQ",    "ADV_SCAN_IND",    "RESERVED0",
-    "RESERVED1", "RESERVED2",      "RESERVED3",       "RESERVED4",
-    "RESERVED5", "RESERVED6",      "RESERVED7",       "RESERVED8"};
+    "ADV_IND",   "DIRECT_IND",  "NONCONN_IND", "SCAN_REQ",
+    "SCAN_RSP",  "CONNECT_REQ", "SCAN_IND",    "RESERVED0",
+    "RESERVED1", "RESERVED2",   "RESERVED3",   "RESERVED4",
+    "RESERVED5", "RESERVED6",   "RESERVED7",   "RESERVED8"};
 
 const char *brf_adv_pdu_get_type_str(brf_adv_pdu_t *pdu) {
   assert(pdu);
@@ -70,11 +70,11 @@ bool brf_adv_pdu_get_adv_a(brf_adv_pdu_t *pdu, uint8_t *byte_in,
       memcpy(byte_in, pdu->payload, BRF_ADV_PDU_ADV_A_SIZE);
       break;
     case BRF_ADV_PDU_SCAN_REQ:
+    case BRF_ADV_PDU_CONNECT_IND:
       memcpy(byte_in, &pdu->payload[BRF_ADV_PDU_SCAN_A_SIZE],
              BRF_ADV_PDU_ADV_A_SIZE);
       break;
     case BRF_ADV_PDU_EXT_IND:
-    case BRF_ADV_PDU_CONNECT_IND:
     case BRF_ADV_PDU_CONNECT_RSP:
     default:
       return false;

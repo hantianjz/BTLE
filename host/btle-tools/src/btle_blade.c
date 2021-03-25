@@ -608,7 +608,7 @@ void btle_demod_process(brf_t *brf, brf_data_t *rx_data) {
       } else {
         brf_print(&brf->async_tasks, "\t");
       }
-      brf_print(&brf->async_tasks, " ADV:%s  \tT:%d tR:%d \tCRC%d\n",
+      brf_print(&brf->async_tasks, " %s  \tT:%d tR:%d \tCRC%d\n",
                 brf_adv_pdu_get_type_str(&pdu), brf_adv_pdu_get_tx_add(&pdu),
                 brf_adv_pdu_get_rx_add(&pdu), crc_flag);
     }
