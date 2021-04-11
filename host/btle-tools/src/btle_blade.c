@@ -4,6 +4,7 @@
 
 #include "brf_adv_pdu.h"
 #include "brf_crc.h"
+#include "brf_ll_pdu.h"
 #include "brf_shift_queue.h"
 
 // System includes
@@ -24,18 +25,18 @@
 /* #include <sys/types.h> */
 
 /* Thread-safe wrapper around fprintf(stderr, ...) */
-#define brf_print(repeater_, ...)                    \
-  do {                                               \
-    pthread_mutex_lock(&(repeater_)->stderr_lock);   \
-    fprintf(stdout, __VA_ARGS__);                    \
-    fflush(stdout);                                  \
-    pthread_mutex_unlock(&(repeater_)->stderr_lock); \
+#define brf_print(repeater_, ...)                                              \
+  do {                                                                         \
+    pthread_mutex_lock(&(repeater_)->stderr_lock);                             \
+    fprintf(stdout, __VA_ARGS__);                                              \
+    fflush(stdout);                                                            \
+    pthread_mutex_unlock(&(repeater_)->stderr_lock);                           \
   } while (0)
 
 #define MAX_GAIN 60
 #define DEFAULT_GAIN 45
 
-volatile int rx_buf_offset;  // remember to initialize it!
+volatile int rx_buf_offset; // remember to initialize it!
 
 static brf_t s_brf;
 
@@ -539,78 +540,87 @@ void btle_demod_process(brf_t *brf, brf_data_t *rx_data) {
     iq_samples += advanced_samples;
 
     /***** Demod the main packet header *****/
-    brf_adv_pdu_t pdu;
-    memset(&pdu, 0, sizeof(pdu));
+    brf_adv_pdu_t *pdu = (brf_adv_pdu_t *)malloc(sizeof(brf_adv_pdu_t));
 
     // Ensure there is at least 2 bytes worth of iq samples left
     // TODO: Handle warp around to next rx data block
     if (iq_samples_count <
-        (sizeof(pdu.hdr) * NUM_BIT_PER_BYTE * IQ_PER_SYMBOL)) {
+        (BRF_ADV_PDU_HEADER_SIZE * NUM_BIT_PER_BYTE * IQ_PER_SYMBOL)) {
       break;
     }
 
     // Demodulate header byte + length byte immediately after the access addr
     advanced_samples = btle_demod_bytes(iq_samples, iq_samples_count,
-                                        (uint8_t *)&pdu.hdr, sizeof(pdu.hdr));
+                                        (uint8_t *)&pdu->hdr, sizeof(pdu->hdr));
     iq_samples_count -= advanced_samples;
     iq_samples += advanced_samples;
 
     // Descramble the header 2 bytes
-    scramble_byte((uint8_t *)&pdu.hdr, sizeof(pdu.hdr),
+    scramble_byte((uint8_t *)&pdu->hdr, sizeof(pdu->hdr),
                   scramble_table[brf->channel_number]);
 
-    size_t payload_len = brf_adv_pdu_get_len(&pdu);
+    size_t payload_len = brf_adv_pdu_get_len(pdu);
 
-    if (payload_len < 6 || payload_len > 37) {
+    if (payload_len > BRF_ADV_PDU_PAYLOAD_MAX_SIZE) {
       brf_print(&brf->async_tasks,
                 "Error: ADV(%s) payload length(%lu) should be 6~37!\n",
-                brf_adv_pdu_get_type_str(&pdu), payload_len);
+                brf_adv_pdu_get_type_str(pdu), payload_len);
+      free(pdu);
       continue;
     }
 
+    pdu->payload.buff_size = payload_len;
+
     // Ensure there is at least payload len worth of iq samples left
     // TODO: Handle warp around to next rx data block
-    if (iq_samples_count < ((payload_len + BRF_ADV_PDU_CRC_SIZE) *
+    if (iq_samples_count < ((payload_len + BRF_LL_PDU_CRC_SIZE) *
                             NUM_BIT_PER_BYTE * IQ_PER_SYMBOL)) {
+      free(pdu);
       break;
     }
 
     // Demodulate main payload
-    advanced_samples = btle_demod_bytes(iq_samples, iq_samples_count,
-                                        pdu.payload, payload_len);
+    advanced_samples =
+        btle_demod_bytes(iq_samples, iq_samples_count, pdu->payload.buff,
+                         pdu->payload.buff_size);
     iq_samples_count -= advanced_samples;
     iq_samples += advanced_samples;
 
     // Demodulate crc bytes
-    advanced_samples = btle_demod_bytes(iq_samples, iq_samples_count, pdu.crc,
-                                        BRF_ADV_PDU_CRC_SIZE);
+    brf_ll_pdu_t ll_pdu;
+    advanced_samples = btle_demod_bytes(iq_samples, iq_samples_count,
+                                        ll_pdu.crc, BRF_LL_PDU_CRC_SIZE);
     iq_samples_count -= advanced_samples;
     iq_samples += advanced_samples;
 
     // Descramble the payload bytes
-    scramble_byte(pdu.payload, payload_len,
-                  &scramble_table[brf->channel_number][sizeof(pdu.hdr)]);
+    scramble_byte(pdu->payload.buff, pdu->payload.buff_size,
+                  &scramble_table[brf->channel_number][sizeof(pdu->hdr)]);
 
     // Descramble the crc bytes
     scramble_byte(
-        pdu.crc, sizeof(pdu.crc),
-        &scramble_table[brf->channel_number][sizeof(pdu.hdr) + payload_len]);
+        ll_pdu.crc, sizeof(ll_pdu.crc),
+        &scramble_table[brf->channel_number][sizeof(pdu->hdr) + payload_len]);
 
-    uint32_t calc_crc = brf_crc24((uint8_t *)&pdu.hdr, sizeof(pdu.hdr));
-    calc_crc = brf_crc24_update(pdu.payload, payload_len, calc_crc);
-    bool crc_flag = brf_adv_pdu_get_crc(&pdu) == calc_crc;
+    uint32_t calc_crc = brf_crc24((uint8_t *)&pdu->hdr, sizeof(pdu->hdr));
+    calc_crc =
+        brf_crc24_update(pdu->payload.buff, pdu->payload.buff_size, calc_crc);
+    bool crc_flag = brf_ll_pdu_get_crc(&ll_pdu) == calc_crc;
 
     if (crc_flag) {
       uint8_t adv_a[BRF_ADV_PDU_ADV_A_SIZE];
-      bool ret = brf_adv_pdu_get_adv_a(&pdu, adv_a, sizeof(adv_a));
+      bool ret = brf_adv_pdu_get_adv_a(pdu, adv_a, sizeof(adv_a));
       if (ret) {
+        // Print MAC Address
         btle_print_mac_addr(adv_a, sizeof(adv_a));
       } else {
         brf_print(&brf->async_tasks, "\t");
       }
-      brf_print(&brf->async_tasks, " %s  \tT:%d tR:%d \tCRC%d\n",
-                brf_adv_pdu_get_type_str(&pdu), brf_adv_pdu_get_tx_add(&pdu),
-                brf_adv_pdu_get_rx_add(&pdu), crc_flag);
+      // Print the reset of the ADV PDU
+      brf_print(&brf->async_tasks, "\t%s (%d) \t\t ChSel:%d T:%d tR:%d \tCRC\n",
+                brf_adv_pdu_get_type_str(pdu), brf_adv_pdu_get_len(pdu),
+                brf_adv_pdu_get_chsel(pdu), brf_adv_pdu_get_tx_add(pdu),
+                brf_adv_pdu_get_rx_add(pdu));
     }
   }
 }
@@ -655,12 +665,11 @@ int main(int argc, char **argv) {
     s_brf.channel_number = chan;
   }
 
-  printf(
-      "Cmd line input: chan %d, freq %lldMHz, access addr %08x, crc init "
-      "%06x "
-      "raw %d verbose %d rx %ddB file=%s\n",
-      chan, freq_hz / MEGAHZ, access_addr, crc_init, raw_flag, verbose_flag,
-      gain, filename_pcap);
+  printf("Cmd line input: chan %d, freq %lldMHz, access addr %08x, crc init "
+         "%06x "
+         "raw %d verbose %d rx %ddB file=%s\n",
+         chan, freq_hz / MEGAHZ, access_addr, crc_init, raw_flag, verbose_flag,
+         gain, filename_pcap);
 
   // run cyclic recv in background
   s_brf.async_tasks.do_exit = false;
