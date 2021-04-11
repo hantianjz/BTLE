@@ -1,0 +1,21 @@
+executable("btle_blade") {
+  sources = [
+    "brf_adv_pdu.c",
+    "brf_adv_pdu.h",
+    "brf_adv_pdu_payload.h",
+    "brf_crc.c",
+    "brf_crc.h",
+    "brf_ll_pdu.c",
+    "brf_ll_pdu.h",
+    "brf_shift_queue.c",
+    "brf_shift_queue.h",
+    "btle_blade.c",
+    "btle_blade.h",
+    "scramble_table.h",
+  ]
+  lib_dirs = [ "." ]
+  libs = [
+    "bladeRF",
+    "pthread",
+  ]
+}

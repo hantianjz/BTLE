@@ -1,0 +1,3 @@
+group("btle") {
+  deps = [ "//src:btle_blade" ]
+}
