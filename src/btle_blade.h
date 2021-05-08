@@ -10,11 +10,13 @@ extern "C" {
 
 /*----------------------BTLE SPEC related----------------------*/
 #include "scramble_table.h"
+
+#define DEFAULT_ACCESS_ADDR (0x8E89BED6)
+#define DEFAULT_ACCESS_MASK (0xFFFFFFFF)
+
 enum {
   DEFAULT_CHANNEL = 37,
   PREAMBLE_1M = (0xAA),
-  DEFAULT_ACCESS_ADDR = (0x8E89BED6),
-  DEFAULT_ACCESS_MASK = (0xFFFFFFFF),
   DEFAULT_CRC_INIT = (0x555555),
   MAX_CHANNEL_NUMBER = 39,
   MAX_NUM_INFO_BYTE = (43),
@@ -23,7 +25,7 @@ enum {
   MAX_NUM_PHY_SAMPLE = (MAX_NUM_PHY_BYTE * 8 * IQ_PER_SYMBOL),
   LEN_BUF_MAX_NUM_PHY_SAMPLE = (2 * MAX_NUM_PHY_SAMPLE),
 
-  NUM_DATA_PER_SYMBOL = 2,  // IQ Pair each uint16_t
+  NUM_DATA_PER_SYMBOL = 2, // IQ Pair each uint16_t
   NUM_DATA_PER_SAMPLE = NUM_DATA_PER_SYMBOL * IQ_PER_SYMBOL,
   NUM_BIT_PER_BYTE = 8,
   NUM_PREAMBLE_BYTE = (1),
@@ -96,13 +98,13 @@ typedef struct brf {
 
   bool debug;
 
-  uint8_t preamble_bit_array[NUM_BIT_PER_BYTE];                        // 8
-  uint8_t access_addr_bit_array[sizeof(uint32_t) * NUM_BIT_PER_BYTE];  // 32
-  uint8_t access_mask_bit_array[sizeof(uint32_t) * NUM_BIT_PER_BYTE];  // 32
+  uint8_t preamble_bit_array[NUM_BIT_PER_BYTE];                       // 8
+  uint8_t access_addr_bit_array[sizeof(uint32_t) * NUM_BIT_PER_BYTE]; // 32
+  uint8_t access_mask_bit_array[sizeof(uint32_t) * NUM_BIT_PER_BYTE]; // 32
 } brf_t;
 /*----------------------BladeRF struct definition----------------------*/
 
-uint64_t btle_get_freq_by_channel_number(int channel_number);
+uint64_t btle_get_freq_by_channel_number(unsigned int channel_number);
 
 int btle_setup_board(brf_t *brf, uint64_t freq_hz, int gain);
 
@@ -114,7 +116,7 @@ void btle_teardown_stream(brf_t *brf);
 
 int btle_setup_demod(brf_t *brf);
 
-void scramble_byte(uint8_t *bytes, int num_byte,
+void scramble_byte(uint8_t *bytes, size_t num_byte,
                    const uint8_t *scramble_table_byte);
 
 void btle_sigint_callback_handler(int signum);
@@ -139,10 +141,10 @@ void btle_print_mac_addr(uint8_t *data, size_t len);
 uint8_t *brf_search_bit_array_pattern(uint8_t *data, size_t data_len,
                                       uint8_t *pattern, size_t pattern_len);
 
-int brf_search_unique_bits(const iq_sample_t *iq_buff, size_t iq_count,
-                           const uint8_t *unique_bits,
-                           const uint8_t *unique_bits_mask,
-                           size_t unique_bits_size);
+size_t brf_search_unique_bits(const iq_sample_t *iq_buff, size_t iq_count,
+                              const uint8_t *unique_bits,
+                              const uint8_t *unique_bits_mask,
+                              size_t unique_bits_size);
 
 void *btle_rx_task_run(void *ctx);
 

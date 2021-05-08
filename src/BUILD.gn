@@ -16,6 +16,5 @@ executable("btle_blade") {
   lib_dirs = [ "." ]
   libs = [
     "bladeRF",
-    "pthread",
   ]
 }

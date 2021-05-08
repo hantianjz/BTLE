@@ -1,4 +1,4 @@
 #!/bin/bash
-gn gen out
+gn gen out --export-compile-commands
 cd out
-ninja -C .
+ninja -v -C .

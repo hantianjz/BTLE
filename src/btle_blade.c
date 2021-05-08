@@ -36,7 +36,7 @@ void btle_sigint_callback_handler(int signum) {
   s_brf.async_tasks.do_exit = true;
 }
 
-uint64_t btle_get_freq_by_channel_number(int channel_number) {
+uint64_t btle_get_freq_by_channel_number(unsigned int channel_number) {
   uint64_t freq_hz;
   if (channel_number == 37) {
     freq_hz = 2402 * MEGAHZ;
@@ -44,7 +44,7 @@ uint64_t btle_get_freq_by_channel_number(int channel_number) {
     freq_hz = 2426 * MEGAHZ;
   } else if (channel_number == 39) {
     freq_hz = 2480 * MEGAHZ;
-  } else if ((channel_number >= 0) && (channel_number <= 10)) {
+  } else if (channel_number <= 10) {
     freq_hz = (2404 * MEGAHZ) + (channel_number * (2 * MEGAHZ));
   } else if ((channel_number >= 11) && (channel_number <= 36)) {
     freq_hz = (2428 * MEGAHZ) + ((channel_number - 11) * (2 * MEGAHZ));
@@ -109,7 +109,8 @@ void brf_bit_array_to_bytes(uint8_t *bit_array, size_t bit_array_size,
 
   // Data is in Little-endian, least significant bit transmitted first
   for (unsigned i = 0; i < bytes_size * NUM_BIT_PER_BYTE; i++) {
-    bytes[i / NUM_BIT_PER_BYTE] |= bit_array[i] << (i % NUM_BIT_PER_BYTE);
+    bytes[i / NUM_BIT_PER_BYTE] |=
+        (uint8_t)(bit_array[i] << (i % NUM_BIT_PER_BYTE)) & 0xFF;
   }
 }
 
@@ -166,10 +167,10 @@ uint8_t *brf_search_bit_array_pattern(uint8_t *data, size_t data_len,
   return NULL;
 }
 
-int brf_search_unique_bits(const iq_sample_t *iq_samples, size_t iq_count,
-                           const uint8_t *unique_bits,
-                           const uint8_t *unique_bits_mask,
-                           size_t unique_bits_size) {
+size_t brf_search_unique_bits(const iq_sample_t *iq_samples, size_t iq_count,
+                              const uint8_t *unique_bits,
+                              const uint8_t *unique_bits_mask,
+                              size_t unique_bits_size) {
   assert(iq_samples);
 
   // Ensure unique_bits_size is order of 2 value
@@ -179,13 +180,13 @@ int brf_search_unique_bits(const iq_sample_t *iq_samples, size_t iq_count,
   uint8_t *demod_queue_buf =
       (uint8_t *)malloc(IQ_PER_SYMBOL * unique_bits_size);
 
-  for (int i = 0; i < (int)IQ_PER_SYMBOL; i++) {
+  for (unsigned int i = 0; i < IQ_PER_SYMBOL; i++) {
     brf_shift_queue_init(&demod_queue[i],
                          &demod_queue_buf[i * unique_bits_size],
                          unique_bits_size);
   }
 
-  int ret_sample_idx = -1;
+  size_t ret_sample_idx = 0;
 
   // Iterate over iq_samples one sample at a time attempting to
   // find the unique_bits.
@@ -223,10 +224,9 @@ int brf_search_unique_bits(const iq_sample_t *iq_samples, size_t iq_count,
   return ret_sample_idx;
 }
 
-void scramble_byte(uint8_t *bytes, int num_byte,
+void scramble_byte(uint8_t *bytes, size_t num_byte,
                    const uint8_t *scramble_table_byte) {
-  int i;
-  for (i = 0; i < num_byte; i++) {
+  for (size_t i = 0; i < num_byte; i++) {
     bytes[i] = bytes[i] ^ scramble_table_byte[i];
   }
 }
@@ -504,13 +504,13 @@ void btle_demod_process(brf_t *brf, brf_data_t *rx_data) {
     if (iq_samples_count < (sizeof(brf->preamble_bit_array) * IQ_PER_SYMBOL)) {
       break;
     }
-    int advanced_samples = brf_search_unique_bits(
+    size_t advanced_samples = brf_search_unique_bits(
         iq_samples, iq_samples_count, brf->preamble_bit_array,
         brf->access_mask_bit_array, sizeof(brf->preamble_bit_array));
-    if (advanced_samples < 0) {
+    if (!advanced_samples) {
       break;
     }
-    iq_samples_count -= advanced_samples;
+    iq_samples_count -= (unsigned)advanced_samples;
     iq_samples += advanced_samples;
 
     // TODO: Do both togather
@@ -523,11 +523,11 @@ void btle_demod_process(brf_t *brf, brf_data_t *rx_data) {
     advanced_samples = brf_search_unique_bits(
         iq_samples, iq_samples_count, brf->access_addr_bit_array,
         brf->access_mask_bit_array, sizeof(brf->access_addr_bit_array));
-    if (advanced_samples < 0) {
+    if (!advanced_samples) {
       break;
     }
 
-    iq_samples_count -= advanced_samples;
+    iq_samples_count -= (unsigned)advanced_samples;
     iq_samples += advanced_samples;
 
     /***** Demod the main packet header *****/
@@ -652,7 +652,7 @@ int main(int argc, char **argv) {
   phase = 0;
 
   if (freq_hz == 123) {
-    freq_hz = btle_get_freq_by_channel_number(chan);
+    freq_hz = btle_get_freq_by_channel_number((unsigned)chan);
     s_brf.channel_number = chan;
   }
 
